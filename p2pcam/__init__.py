@@ -1,8 +1,10 @@
-name = "p2pcam"
-import sys, traceback
-import socket
-import time
+import traceback
+import sys
 import random
+import time
+import socket
+name = "p2pcam"
+
 
 class RestartException(Exception):
     def __init__(self, msg, delay=1):
@@ -11,6 +13,7 @@ class RestartException(Exception):
 
     def __str__(self):
         return repr(self.msg)
+
 
 class P2PCam():
     def __init__(self, host_ip, target_ip):
@@ -87,9 +90,6 @@ class P2PCam():
         self.msg = bytearray()
         self.timeout_iteration = 0
         self.hasInitialised = False
-
-    def byteToInt(self, byteVal):
-        return byteVal
 
     def sendControlPacket(self, packet):
         if self.debug:
@@ -204,7 +204,7 @@ class P2PCam():
                 except socket.timeout:
                     if self.timeout_iteration > 3:
                         raise Exception('Not responding')
-                    self.timeout_iteration +=1
+                    self.timeout_iteration += 1
                     raise RestartException("Socket timeout 1", 1)
                 except KeyboardInterrupt:
                     raise
@@ -264,7 +264,6 @@ class P2PCam():
         except KeyboardInterrupt:
             raise
 
-
     def retrieveImage(self):
         if not self.hasInitialised:
             self.initialize()
@@ -298,20 +297,19 @@ class P2PCam():
                     if nbbytes >= 17:
                         # First frame / Start of Image : get rid of the 15 bytes header
                         if (chunk[15] == 255) and (chunk[16] == 216):
-                            self.lastFragmentId = self.byteToInt(chunk[0])
+                            self.lastFragmentId = chunk[0]
                             self.msg += chunk[15:]
                         # additional data fragment : just drop the 4 bytes header and concatenate to already received data
                         else:
                             # Check for sequence number continuity
-                            if ((self.byteToInt(chunk[0]) == self.lastFragmentId + 1) or (
-                                    self.byteToInt(chunk[0]) == 0) and (self.lastFragmentId == 255)):
+                            if (chunk[0] == self.lastFragmentId + 1) or (chunk[0] == 0) and (self.lastFragmentId == 255):
                                 self.msg += chunk[4:]
                             # If we lost a fragment, no point in continuing accumulating data for this frame so restart another data grab
                             else:
                                 self.msg = b''
                                 self.fragments_received = 0
                             # Keep track of sequence number
-                            self.lastFragmentId = self.byteToInt(chunk[0])
+                            self.lastFragmentId = chunk[0]
                     # If we received an unexpected packet in the middle of the image data, something is wrong : just drop the ongoing image capture & restart
                     else:
                         self.msg = b''
@@ -353,7 +351,7 @@ class P2PCam():
                         if (self.imageIndex % 900 == 0):
                             if self.debug:
                                 print(("[DATA] Still alive %s, image index %d" % (
-                                time.strftime("%Y-%m-%d @ %H:%M:%S"), self.imageIndex)))
+                                    time.strftime("%Y-%m-%d @ %H:%M:%S"), self.imageIndex)))
                                 pass
                         self.imageIndex += 1
                     #        else:
@@ -363,8 +361,9 @@ class P2PCam():
                     self.fragments_received = 0
                     self.manageContinuePackets()
                     if hasattr(self, 'flipcode') or self.addTimeStamp:
-                        import cv2, numpy
-                        image = cv2.imdecode(numpy.fromstring(self.jpeg, dtype=numpy.uint8),cv2.IMREAD_COLOR)
+                        import cv2
+                        import numpy
+                        image = cv2.imdecode(numpy.fromstring(self.jpeg, dtype=numpy.uint8), cv2.IMREAD_COLOR)
                         if hasattr(self, 'flipcode'):
                             cv2.flip(image, self.flipcode, image)
                         if self.addTimeStamp:
