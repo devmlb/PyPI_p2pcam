@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 import p2pcam as Camera
-import cv2
-import numpy as np
+from PIL import Image
+from io import BytesIO
 
 def saveFile(cam, jpeg):
-    RGBImageNext = cv2.imdecode(np.fromstring(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-    cv2.imwrite('image.jpg', RGBImageNext)
+    image = Image.open(BytesIO(jpeg))
+    image.save("image.jpg")
 
 
 camera = Camera.P2PCam("192.168.178.28", "192.168.178.9")
 camera.NB_FRAGMENTS_TO_ACCUMULATE = 20
 # camera.SOCKET_TIMEOUT = 20
 # camera.debug = True
+
+# camera.vertical_flip = True
+# camera.horizontal_flip = True
+# camera.addTimeStamp = True
 
 # Loop in scripts loop. Not recommended since you are lacking control.
 
@@ -36,4 +40,3 @@ while camera.socket_error == False:
         raise
     except Exception as e:
         print(("[ERROR] " + str(e)))
-        pass

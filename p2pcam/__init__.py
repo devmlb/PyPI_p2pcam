@@ -3,6 +3,8 @@ import sys
 import random
 import time
 import socket
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 name = "p2pcam"
 
 
@@ -131,12 +133,6 @@ class P2PCam():
 
     def initialize(self):
         try:
-            if self.horizontal_flip and self.vertical_flip:
-                self.flipcode = -1
-            elif self.horizontal_flip:
-                self.flipcode = 0
-            elif self.vertical_flip:
-                self.flipcode = 1
             self.global_loop_iteration += 1
             if self.debug:
                 print("*****************************************************************")
@@ -361,16 +357,23 @@ class P2PCam():
                     self.msg = b''
                     self.fragments_received = 0
                     self.manageContinuePackets()
-                    if hasattr(self, 'flipcode') or self.addTimeStamp:
-                        import cv2
-                        import numpy
-                        image = cv2.imdecode(numpy.fromstring(self.jpeg, dtype=numpy.uint8), cv2.IMREAD_COLOR)
-                        if hasattr(self, 'flipcode'):
-                            cv2.flip(image, self.flipcode, image)
-                        if self.addTimeStamp:
-                            cv2.putText(image, time.strftime("%Y-%m-%d  %H:%M:%S"), (10, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 255), 2, 8)
-                        return cv2.imencode('.jpg', image)[1].tostring()
-                    return self.jpeg
+                    image = Image.open(BytesIO(self.jpeg))
+                    output_jpeg = BytesIO()
+                    # Image flips
+                    if self.vertical_flip:
+                        image = image.transpose(Image.FLIP_TOP_BOTTOM)
+                    if self.horizontal_flip:
+                        image = image.transpose(Image.FLIP_LEFT_RIGHT)
+                    # Timestamp
+                    if self.addTimeStamp:
+                        draw = ImageDraw.Draw(image)
+                        try:
+                            font = ImageFont.truetype("arial.ttf", 15)
+                        except:
+                            font = ImageFont.load_default()
+                        draw.text((10, 10), time.strftime("%Y-%m-%d  %H:%M:%S"), font=font, fill=(255, 255, 255), stroke_width=1, stroke_fill=(0, 0, 0))
+                    image.save(output_jpeg, format="JPEG")
+                    return output_jpeg.getvalue()
             if self.socket_error:
                 self.initialize()
                 return self.retrieveImage()
