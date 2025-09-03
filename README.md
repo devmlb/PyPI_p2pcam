@@ -39,7 +39,7 @@ Some variables you may want to set.
 
 `camera.vertical_flip` Flip camera vertically. (if true requires numpy and cv2)
 
-`camera.addTimeStamp` Add a timestamp to the image. (if true requires numpy and cv2)
+`camera.add_timestamp` Add a timestamp to the image. (if true requires numpy and cv2)
 
 `camera.debug` If true prints out some debugging information.
 

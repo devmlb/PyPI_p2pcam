@@ -21,7 +21,7 @@ class P2PCam():
     def __init__(self, host_ip, target_ip):
         self.horizontal_flip = False
         self.vertical_flip = False
-        self.addTimeStamp = False
+        self.add_timestamp = False
         self.debug = False
 
         self.global_loop_iteration = 0
@@ -365,7 +365,7 @@ class P2PCam():
                     if self.horizontal_flip:
                         image = image.transpose(Image.FLIP_LEFT_RIGHT)
                     # Timestamp
-                    if self.addTimeStamp:
+                    if self.add_timestamp:
                         draw = ImageDraw.Draw(image)
                         try:
                             font = ImageFont.truetype("arial.ttf", 15)

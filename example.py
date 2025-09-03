@@ -15,7 +15,7 @@ camera.NB_FRAGMENTS_TO_ACCUMULATE = 20
 
 # camera.vertical_flip = True
 # camera.horizontal_flip = True
-# camera.addTimeStamp = True
+# camera.add_timestamp = True
 
 # Loop in scripts loop. Not recommended since you are lacking control.
 
