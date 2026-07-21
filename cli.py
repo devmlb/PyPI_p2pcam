@@ -1,6 +1,9 @@
 from typing import Iterable
 from p2pcam import LanDevice
 from p2pcam import LanScanner
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
+import time
 import os
 
 
@@ -47,6 +50,21 @@ if __name__ == "__main__":
         default=8080,
         help="Port for the HTTP MJPEG server (default: 8080)",
     )
+    parser.add_argument(
+        "--vertical-flip",
+        action="store_true",
+        help="Vertically flip the video stream",
+    )
+    parser.add_argument(
+        "--horizontal-flip",
+        action="store_true",
+        help="Horizontally flip the video stream",
+    )
+    parser.add_argument(
+        "--add-timestamp",
+        action="store_true",
+        help="Add date related text to the video stream",
+    )
 
     args = parser.parse_args()
 
@@ -76,21 +94,52 @@ if __name__ == "__main__":
         count = 0
         try:
             with LanVideoClient(camera_ip=ip, hkid=target.hkid) as client:
-                for frame in client.stream(timeout=10.0):
+                for raw_frame in client.stream(timeout=10.0):
                     count += 1
 
-                    if server:
-                        server.update_frame(frame)
-                        if count % 30 == 0:
-                            print(f"Streamed {count} frames...")
-                    else:
-                        path = os.path.join(args.outdir, f"frame_{count:04d}.jpg")
-                        with open(path, "wb") as f:
-                            f.write(frame)
-                        print(f"Captured frame {count} to {path} ({len(frame)} bytes)")
+                    try:
+                        input_frame = Image.open(BytesIO(raw_frame))
+                        output_frame = BytesIO()
+                        # Image flips
+                        if args.vertical_flip:
+                            input_frame = input_frame.transpose(Image.FLIP_TOP_BOTTOM)
+                        if args.horizontal_flip:
+                            input_frame = input_frame.transpose(Image.FLIP_LEFT_RIGHT)
+                        # Timestamp
+                        if args.add_timestamp:
+                            draw = ImageDraw.Draw(input_frame)
+                            try:
+                                font = ImageFont.truetype("arial.ttf", 15)
+                            except:
+                                font = ImageFont.load_default()
+                            draw.text(
+                                (10, 10),
+                                time.strftime("%Y-%m-%d  %H:%M:%S"),
+                                font=font,
+                                fill=(255, 255, 255),
+                                stroke_width=1,
+                                stroke_fill=(0, 0, 0),
+                            )
+                        input_frame.save(output_frame, format="JPEG")
+                        frame = output_frame.getvalue()
 
-                    if args.max_frames > 0 and count >= args.max_frames:
-                        break
+                        if server:
+                            server.update_frame(frame)
+                            if count % 30 == 0:
+                                print(f"Streamed {count} frames...")
+                        else:
+                            path = os.path.join(args.outdir, f"frame_{count:04d}.jpg")
+                            with open(path, "wb") as f:
+                                f.write(frame)
+                            print(
+                                f"Captured frame {count} to {path} ({len(frame)} bytes)"
+                            )
+
+                        if args.max_frames > 0 and count >= args.max_frames:
+                            break
+                    except:
+                        # Simply ignore the frame as I observed that some frames may be corrupted
+                        continue
 
         except KeyboardInterrupt:
             print("\nStreaming stopped by user.")

@@ -106,7 +106,7 @@ class LanScanner:
                 "MacIP": self.mac_ip,
             }
         )
-        inner = self._build_inner_packet(self.COMMAND_LAN_REFRESH, body)
+        inner = self._build_inner_packet(COMMAND_LAN_REFRESH, body)
         total_len = len(inner) + 4
         return b"\x00\x00" + struct.pack("<H", total_len << 4) + inner
 
@@ -146,7 +146,7 @@ class LanScanner:
                 candidates.append(data[13:packet_len])
         if len(data) >= 9:
             command = data[0] >> 4
-            if command == self.COMMAND_LAN_REFRESH:
+            if command == COMMAND_LAN_REFRESH:
                 candidates.append(data[9:])
         candidates.append(data)
 
