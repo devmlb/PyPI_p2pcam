@@ -1,5 +1,6 @@
 # P2PCam
-Class to retrieve camera images from cameras using the p2p protocol
+
+Classes to retrieve camera images from cameras using the p2p protocol
 
 First of all i just wrote it to work as a class, the original connection and retrieval process has been made by [Jheyman](https://github.com/jheyman/) in his [videosurveillance script](https://github.com/jheyman/videosurveillance/).
 I rewrote it to run as a class instead of an application.
@@ -8,50 +9,55 @@ So i had this [chinese camera](https://nl.aliexpress.com/item/Phone-monitor-P2P-
 
 Which made owning this camera quite useless. But i had since gotten into Home Asssistant and got the idea to get it working in there since my instance ran locally so it should be able to access the camera.
 
-## Usage
+## Quick start
+
+You can use the cli.py script to quickly test your camera.
+
+```bash
+# Detect cameras on your local network
+python3 cli.py
+
+# Detect a camera on your network, connect to it and save 10 JPEG frames in the frames folder
+python3 cli.py --video --max-frames 10 --outdir frames/
+
+# Detect a camera on your network, connect to it and start an HTTP MJPEG server on port 8080
+python3 cli.py --video --serve --port 8080
+
+# If you want to use image transformations first install pillow
+pip install pillow
+# Then you can append --vertical-flip, --horizontal-flip or --add-timestamp to any command
 ```
-import p2pcam
-import cv2
-import numpy as np
 
-def saveFile(cam, jpeg):
-    RGBImage = cv2.imdecode(np.fromstring(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
-    cv2.imwrite('image.jpg', RGBImage)
+## API
 
-camera = p2pcam.P2PCam(<own ip>, <camera ip>)
-saveFile(camera, camera.retrieveImage())
-```
-## Methods and Variables
-### Methods
-Any methods that may be useful.
+### LanScanner
 
-`camera.initialize()` Set some variables and attempt to connect to the camera for the first time.
+#### `refresh(timeout: float = 3.0) -> list[LanDevice]`
 
-`camera.retrieveImage()` Retrieve a jpeg string from the camera.
+Broadcasts a LAN refresh packet, waits for camera responses, and returns the discovered devices sorted by device ID and HKID.
 
-`camera.start()` Start a while true loop staying connected, this will not do anything if `onJpegReceived` isn't set.
+### LanVideoClient
 
-`camera.loop()` Start a while loop doing `retrieveImage()` until a socket error occurs.
-### Variables
-Some variables you may want to set.
+#### `stream(timeout: float = 60.0) -> Iterator[bytes]`
 
-`camera.horizontal_flip` Flip camera horizontally. (if true requires numpy and cv2)
+Opens the UDP session, performs the full camera handshake, and yields complete JPEG frames as they become available.
 
-`camera.vertical_flip` Flip camera vertically. (if true requires numpy and cv2)
+#### `close() -> None`
 
-`camera.add_timestamp` Add a timestamp to the image. (if true requires numpy and cv2)
+Stops the stream and closes the UDP socket. Call this when you want to end the session without waiting for the generator to finish.
 
-`camera.debug` If true prints out some debugging information.
+### MJPEGServer
+
+#### `update_frame(frame: bytes) -> None`
+
+Replaces the currently broadcast frame and notifies all connected HTTP clients waiting on the next image.
+
+#### `start() -> None`
+
+Starts the threaded HTTP server and exposes the MJPEG stream on `/stream`.
+
+#### `stop() -> None`
+
+Stops the HTTP server cleanly and closes its socket.
 
 
-The port information will have to be set before initialisation.
-
-`camera.UDP_PORT_HOST` Host udp port default: 5123
-
-`camera.UDP_PORT_TARGET` Target udp port default: 5000
-
-`camera.SOCKET_TIMEOUT` Sets the socket timeout in seconds.
-
-`camera.NB_FRAGMENTS_TO_ACCUMULATE` How many packets to get a full image. If you put this number high you will get a higher quality image but it will take longer to retrieve. Default: 80
-
-`camera.onJpegReceived` Callback that will be executed if a jpeg image is retrieved. first argument will be the camera class, the second argument will be the jpeg image string.
