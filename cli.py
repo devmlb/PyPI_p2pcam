@@ -1,8 +1,6 @@
 from typing import Iterable
 from p2pcam import LanDevice
 from p2pcam import LanScanner
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
 import time
 import os
 
@@ -96,32 +94,38 @@ if __name__ == "__main__":
             with LanVideoClient(camera_ip=ip, hkid=target.hkid) as client:
                 for raw_frame in client.stream(timeout=10.0):
                     count += 1
+                    frame = raw_frame
 
                     try:
-                        input_frame = Image.open(BytesIO(raw_frame))
-                        output_frame = BytesIO()
-                        # Image flips
-                        if args.vertical_flip:
-                            input_frame = input_frame.transpose(Image.FLIP_TOP_BOTTOM)
-                        if args.horizontal_flip:
-                            input_frame = input_frame.transpose(Image.FLIP_LEFT_RIGHT)
-                        # Timestamp
-                        if args.add_timestamp:
-                            draw = ImageDraw.Draw(input_frame)
-                            try:
-                                font = ImageFont.truetype("arial.ttf", 15)
-                            except:
-                                font = ImageFont.load_default()
-                            draw.text(
-                                (10, 10),
-                                time.strftime("%Y-%m-%d  %H:%M:%S"),
-                                font=font,
-                                fill=(255, 255, 255),
-                                stroke_width=1,
-                                stroke_fill=(0, 0, 0),
-                            )
-                        input_frame.save(output_frame, format="JPEG")
-                        frame = output_frame.getvalue()
+                        if args.vertical_flip or args.horizontal_flip or args.add_timestamp:
+                            from io import BytesIO
+                            from PIL import Image, ImageDraw, ImageFont
+                        
+                            input_frame = Image.open(BytesIO(raw_frame))
+                            output_frame = BytesIO()
+                            # Image flips
+                            if args.vertical_flip:
+                                input_frame = input_frame.transpose(Image.FLIP_TOP_BOTTOM)
+                            if args.horizontal_flip:
+                                input_frame = input_frame.transpose(Image.FLIP_LEFT_RIGHT)
+                            # Timestamp
+                            if args.add_timestamp:
+                                draw = ImageDraw.Draw(input_frame)
+                                try:
+                                    font = ImageFont.truetype("arial.ttf", 15)
+                                except:
+                                    font = ImageFont.load_default()
+                                draw.text(
+                                    (10, 10),
+                                    time.strftime("%Y-%m-%d  %H:%M:%S"),
+                                    font=font,
+                                    fill=(255, 255, 255),
+                                    stroke_width=1,
+                                    stroke_fill=(0, 0, 0),
+                                )
+                            input_frame.save(output_frame, format="JPEG")
+                            # Replace the frame content
+                            frame = output_frame.getvalue()
 
                         if server:
                             server.update_frame(frame)
