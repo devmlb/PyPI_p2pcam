@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="github/logo.png" width="100" />
+</p>
+
 # P2PCam
 
 Classes to retrieve camera images from cameras using the p2p protocol
@@ -5,9 +9,11 @@ Classes to retrieve camera images from cameras using the p2p protocol
 First of all i just wrote it to work as a class, the original connection and retrieval process has been made by [Jheyman](https://github.com/jheyman/) in his [videosurveillance script](https://github.com/jheyman/videosurveillance/).
 I rewrote it to run as a class instead of an application.
 
-So i had this [chinese camera](https://nl.aliexpress.com/item/Phone-monitor-P2P-Free-DDNS-Ontop-RT8633-HD-1-4-CMOS-1-0MP-Network-IP-Camera/990524792.html) laying around, it had this feature that you could access it from outside your home without the need for port forwarding. However after a couple of years this brand dissappeared and with it their services so i couldn't connect to it outside of my own network using [this app](https://play.google.com/store/apps/details?id=x.p2p.cam).
+So i had this [chinese camera](https://nl.aliexpress.com/item/Phone-monitor-P2P-Free-DDNS-Ontop-RT8633-HD-1-4-CMOS-1-0MP-Network-IP-Camera/990524792.html) laying around, it had this feature that you could access it from outside your home without the need for port forwarding. However after a couple of years this brand dissappeared and with it their services so i couldn't connect to it outside of my own network using [this app](https://apkpure.com/p2pcamviewer/x.p2p.cam).
 
 Which made owning this camera quite useless. But i had since gotten into Home Asssistant and got the idea to get it working in there since my instance ran locally so it should be able to access the camera.
+
+It has been confirmed that this script works with cameras labelled MD81 or MD81S.
 
 ## Quick start
 
@@ -59,5 +65,3 @@ Starts the threaded HTTP server and exposes the MJPEG stream on `/stream`.
 #### `stop() -> None`
 
 Stops the HTTP server cleanly and closes its socket.
-
-
