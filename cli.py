@@ -96,18 +96,22 @@ if __name__ == "__main__":
                     count += 1
                     frame = raw_frame
 
-                    try:
-                        if args.vertical_flip or args.horizontal_flip or args.add_timestamp:
+                    if args.vertical_flip or args.horizontal_flip or args.add_timestamp:
+                        try:
                             from io import BytesIO
                             from PIL import Image, ImageDraw, ImageFont
-                        
+
                             input_frame = Image.open(BytesIO(raw_frame))
                             output_frame = BytesIO()
                             # Image flips
                             if args.vertical_flip:
-                                input_frame = input_frame.transpose(Image.FLIP_TOP_BOTTOM)
+                                input_frame = input_frame.transpose(
+                                    Image.FLIP_TOP_BOTTOM
+                                )
                             if args.horizontal_flip:
-                                input_frame = input_frame.transpose(Image.FLIP_LEFT_RIGHT)
+                                input_frame = input_frame.transpose(
+                                    Image.FLIP_LEFT_RIGHT
+                                )
                             # Timestamp
                             if args.add_timestamp:
                                 draw = ImageDraw.Draw(input_frame)
@@ -126,6 +130,11 @@ if __name__ == "__main__":
                             input_frame.save(output_frame, format="JPEG")
                             # Replace the frame content
                             frame = output_frame.getvalue()
+                        except:
+                            # Some frames may be corrupted so PIL cannot work with it
+                            # We can simply ignore these frames
+                            count -= 1
+                            continue
 
                         if server:
                             server.update_frame(frame)
@@ -141,9 +150,6 @@ if __name__ == "__main__":
 
                         if args.max_frames > 0 and count >= args.max_frames:
                             break
-                    except:
-                        # Simply ignore the frame as I observed that some frames may be corrupted
-                        continue
 
         except KeyboardInterrupt:
             print("\nStreaming stopped by user.")
