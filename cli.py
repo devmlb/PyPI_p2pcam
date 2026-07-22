@@ -136,24 +136,25 @@ if __name__ == "__main__":
                             count -= 1
                             continue
 
-                        if server:
-                            server.update_frame(frame)
-                            if count % 30 == 0:
-                                print(f"Streamed {count} frames...")
-                        else:
-                            path = os.path.join(args.outdir, f"frame_{count:04d}.jpg")
-                            with open(path, "wb") as f:
-                                f.write(frame)
-                            print(
-                                f"Captured frame {count} to {path} ({len(frame)} bytes)"
-                            )
+                    if server:
+                        server.update_frame(frame)
+                        if count % 30 == 0:
+                            print(f"Streamed {count} frames...")
+                    else:
+                        path = os.path.join(args.outdir, f"frame_{count:04d}.jpg")
+                        with open(path, "wb") as f:
+                            f.write(frame)
+                        print(
+                            f"Captured frame {count} to {path} ({len(frame)} bytes)"
+                        )
 
-                        if args.max_frames > 0 and count >= args.max_frames:
-                            break
+                    if args.max_frames > 0 and count >= args.max_frames:
+                        break
 
         except KeyboardInterrupt:
             print("\nStreaming stopped by user.")
         finally:
+            client.close()
             if server:
                 server.stop()
 

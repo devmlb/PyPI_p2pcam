@@ -1,9 +1,5 @@
 """LAN video stream receiver for HeKai/HK P2P cameras.
 
-Protocol reverse-engineered from:
-  - decompiled ``libchinalink.so`` / ``libcaptetown1.so``
-  - network captures (``p2pcam-android-discover-stream.txt``)
-
 Verified complete handshake sequence (all UDP, port 5000)
 ----------------------------------------------------------
 Every framed packet begins with a 2-byte little-endian **packet counter**
