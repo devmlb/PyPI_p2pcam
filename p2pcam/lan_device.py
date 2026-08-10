@@ -18,5 +18,4 @@ class LanDevice:
     @property
     def online(self) -> bool:
         """True when the SDK reports the device as online."""
-
         return self.status in ONLINE_STATUSES

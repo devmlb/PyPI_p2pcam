@@ -1,11 +1,12 @@
-from typing import Iterable
-from p2pcam import LanDevice
-from p2pcam import LanScanner
 import time
-import os
+from collections.abc import Iterable
+from pathlib import Path
+
+from p2pcam import LanDevice, LanScanner
 
 
 def format_devices(devices: Iterable[LanDevice]) -> str:
+    """Format discovered devices as human-readable text."""
     lines = []
     for device in devices:
         state = "online" if device.online else f"status={device.status}"
@@ -87,7 +88,7 @@ if __name__ == "__main__":
             server = MJPEGServer(port=args.port)
             server.start()
         else:
-            os.makedirs(args.outdir, exist_ok=True)
+            Path(args.outdir).mkdir(parents=True, exist_ok=True)
 
         count = 0
         try:
@@ -99,6 +100,7 @@ if __name__ == "__main__":
                     if args.vertical_flip or args.horizontal_flip or args.add_timestamp:
                         try:
                             from io import BytesIO
+
                             from PIL import Image, ImageDraw, ImageFont
 
                             input_frame = Image.open(BytesIO(raw_frame))
@@ -117,7 +119,7 @@ if __name__ == "__main__":
                                 draw = ImageDraw.Draw(input_frame)
                                 try:
                                     font = ImageFont.truetype("arial.ttf", 15)
-                                except:
+                                except OSError:
                                     font = ImageFont.load_default()
                                 draw.text(
                                     (10, 10),
@@ -130,7 +132,7 @@ if __name__ == "__main__":
                             input_frame.save(output_frame, format="JPEG")
                             # Replace the frame content
                             frame = output_frame.getvalue()
-                        except:
+                        except (OSError, ValueError):
                             # Some frames may be corrupted so PIL cannot work with it
                             # We can simply ignore these frames
                             count -= 1
@@ -141,12 +143,10 @@ if __name__ == "__main__":
                         if count % 30 == 0:
                             print(f"Streamed {count} frames...")
                     else:
-                        path = os.path.join(args.outdir, f"frame_{count:04d}.jpg")
-                        with open(path, "wb") as f:
+                        path = Path(args.outdir) / f"frame_{count:04d}.jpg"
+                        with path.open("wb") as f:
                             f.write(frame)
-                        print(
-                            f"Captured frame {count} to {path} ({len(frame)} bytes)"
-                        )
+                        print(f"Captured frame {count} to {path} ({len(frame)} bytes)")
 
                     if args.max_frames > 0 and count >= args.max_frames:
                         break

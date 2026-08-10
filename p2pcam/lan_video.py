@@ -1,60 +1,61 @@
-"""LAN video stream receiver for HeKai/HK P2P cameras.
+"""
+LAN video stream receiver for HeKai/HK P2P cameras.
 
 Verified complete handshake sequence (all UDP, port 5000)
 ----------------------------------------------------------
 Every framed packet begins with a 2-byte little-endian **packet counter**
-(0x0000, 0x0001, 0x0002 …) followed by a 2-byte outer-length field
+(0x0000, 0x0001, 0x0002 ...) followed by a 2-byte outer-length field
 ``(total_packet_len << 4)`` as uint16-LE, then the inner payload.
 
-Step 1 – Connection ping (3× before camera answers):
+Step 1 - Connection ping (3x before camera answers):
     CLIENT -> CAMERA: 13 bytes  ``00 00 d0 00  82 0c 00 09 00 d1 07 00 00``
 
-Step 2 – Camera acks the ping (1-3 times):
+Step 2 - Camera acks the ping (1-3 times):
     CAMERA -> CLIENT: 13 bytes  ``00 00 d0 00  92 0c 00 09 00 00 00 00 00``
 
-Step 3 – Client sends a second ping type (can be repeated):
+Step 3 - Client sends a second ping type (can be repeated):
     CLIENT -> CAMERA: 13 bytes  ``00 00 d0 00  a2 0c 40 09 00 d1 07 00 00``
 
-Step 4 – Client sends ``HK_RES_REQ`` video request (counter=0x0001):
+Step 4 - Client sends ``HK_RES_REQ`` video request (counter=0x0001):
     Body (XOR 0xe9 from byte 2):
       ``id=<hkid>;ftN0=video.vbVideo.MPEG4;ftN1=net.0;
         ftN2=HKPCPresent.HKPCPresent;opN2=<sid>;
         Callid=<callid>;sidN=<sid>;AsCode=337;
         MainCmd=HK_RES_REQ;user=Lan user;``
 
-Step 5 – While waiting, client sends ICMD2 polls (counter stays at 0x0000):
+Step 5 - While waiting, client sends ICMD2 polls (counter stays at 0x0000):
     ``d4:ICMD2:293:SEQ1:<hkid>:GUARDSEQ1:<seq>``
 
-Step 6 – Camera polls client with ICMD1 (51 bytes); client sends ICMD1 acks.
+Step 6 - Camera polls client with ICMD1 (51 bytes); client sends ICMD1 acks.
 
-Step 7 – Camera sends ``SessionCreate`` (counter=0x0001, ~155 bytes).
+Step 7 - Camera sends ``SessionCreate`` (counter=0x0001, ~155 bytes).
     Body (bencode-like, but XOR 0xe9 from byte 2):
       ``d7:MainCmd13:SessionCreate4:sidN14:<sid>...``
 
-Step 8 – Client sends ``SessionStart`` (counter=0x0002, ~112 bytes) ONLY
-    after receiving ``SessionCreate``:
+Step 8 - Client sends ``SessionStart`` (counter=0x0002, ~112 bytes) ONLY
+after receiving ``SessionCreate``:
     ``MainCmd=SessionStart;sidN=<sid>;ftN0=HKPCPresent.HKPCPresent;
       FD0=4;ftN1=net.1024;FD1=1024;``
 
-Step 9 – Camera starts pushing MJPEG.  Every UDP packet starts with:
+Step 9 - Camera starts pushing MJPEG. Every UDP packet starts with:
     ``<counter_lo> <counter_hi>  84 3d  <chunk_seq 2B>  <frame_info 9B>  <jpeg_bytes>``
     A new JPEG frame begins when bytes [4:6] == ``ff d8``.
 
-Step 10 – During streaming the client ACKs each camera ICMD1 poll with:
+Step 10 - During streaming the client ACKs each camera ICMD1 poll with:
     ``d4:ICMD1:<sid_len>:lastreq1:<hkid>:SEQ3:<seq>e``
 
-Step 11 – To stop, client sends ``SessionDelete``:
+Step 11 - To stop, client sends ``SessionDelete``:
     ``sidN=<sid>;MainCmd=SessionDelete;coz=;``
 """
 
-from __future__ import annotations
-
+import contextlib
 import select
 import socket
 import struct
 import threading
 import time
-from typing import Iterator, Optional
+from collections.abc import Iterator
+from typing import Self
 
 # ---------------------------------------------------------------------------
 # Protocol constants
@@ -74,13 +75,22 @@ _DEFAULT_CALLID = "I0.JvIZbLTnL7MpGdBuLRVmA1a100ff1"
 # Polling intervals
 _POLL_INTERVAL = 0.17  # seconds between ICMD2 polls before stream
 _ACK_INTERVAL = 0.17  # seconds between ICMD1 acks during stream
-_KEEPALIVE_INTERVAL = 5.0  # seconds between 13-byte keepalives
 
 # MJPEG reassembly
 _MAX_UDP_PAYLOAD = 65535
 _MJPEG_HDR_OFFSET = 4  # JPEG SOI is at offset 4 within video UDP payload
 _JPEG_SOI = b"\xff\xd8"
 _JPEG_EOI = b"\xff\xd9"
+_XOR_PREFIX_LEN = 2
+_CONTINUE_LIST_STEP = 2
+_CONTINUE_DIGITS_3 = 3
+_CONTINUE_DIGITS_4 = 4
+_MAX_CONTINUE_DIGITS = 5
+_MIN_SESSION_CREATE_LEN = 14
+_ICMD1_POLL_LEN = 51
+_MJPEG_MIN_LEN = 60
+_PING_ACK_LEN = 13
+_PING_ACK_BYTE = 0x92
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +101,11 @@ _JPEG_EOI = b"\xff\xd9"
 def _xor_encode(s: str) -> bytes:
     """Encode a dict-style string: first 2 bytes plain, rest XOR 0xe9."""
     raw = s.encode("ascii")
-    if len(raw) <= 2:
+    if len(raw) <= _XOR_PREFIX_LEN:
         return raw
-    return raw[:2] + bytes(b ^ _BODY_XOR_KEY for b in raw[2:])
+    return raw[:_XOR_PREFIX_LEN] + bytes(
+        b ^ _BODY_XOR_KEY for b in raw[_XOR_PREFIX_LEN:]
+    )
 
 
 def _xor_encode_all(s: str) -> bytes:
@@ -101,7 +113,7 @@ def _xor_encode_all(s: str) -> bytes:
     return bytes(b ^ _BODY_XOR_KEY for b in s.encode("ascii"))
 
 
-def _build_packet(
+def _build_packet(  # noqa: PLR0917
     counter: int,
     inner_cmd: int,
     inner_flag1: int,
@@ -109,7 +121,8 @@ def _build_packet(
     inner_extra: bytes,
     body: bytes,
 ) -> bytes:
-    """Build a complete packet with the 2-byte counter prefix.
+    """
+    Build a complete packet with the 2-byte counter prefix.
 
     Layout (verified byte-by-byte against the Android app dumps):
       [0-1]   packet counter (uint16 LE)
@@ -140,19 +153,20 @@ def _build_packet(
 def _build_ping1() -> bytes:
     """Build the first connection ping (``82 0c 00 09 00 d1 07 00 00``)."""
     # Exactly as seen in frames 2-4 of the dump, with counter=0x0000
-    return bytes.fromhex("0000d000" "820c000900d1070000")
+    return bytes.fromhex("0000d000820c000900d1070000")
 
 
 def _build_ping2() -> bytes:
     """Build the second connection ping (``a2 0c 40 09 00 d1 07 00 00``)."""
     # Exactly as seen in frames 8-16 of the dump, with counter=0x0000
-    return bytes.fromhex("0000d000" "a20c400900d1070000")
+    return bytes.fromhex("0000d000a20c400900d1070000")
 
 
 def _build_hk_res_req(
     hkid: int, sid: str = _DEFAULT_SID, callid: str = _DEFAULT_CALLID
 ) -> bytes:
-    """Build the HK_RES_REQ video-init packet (counter=0x0001).
+    """
+    Build the HK_RES_REQ video-init packet (counter=0x0001).
 
     Exact layout from frame 17 of the dump:
       counter    = 0x0001
@@ -179,7 +193,8 @@ def _build_hk_res_req(
 
 
 def _build_icmd2_poll(hkid: int, seq: int, session_id: int = 293) -> bytes:
-    """Build the 47-byte ICMD2 poll packet sent while waiting for SessionCreate.
+    """
+    Build the 47-byte ICMD2 poll packet sent while waiting for SessionCreate.
 
     Frame 18 layout:
       counter    = 0x0000
@@ -202,7 +217,8 @@ def _build_icmd2_poll(hkid: int, seq: int, session_id: int = 293) -> bytes:
 
 
 def _build_session_start(sid: str = _DEFAULT_SID) -> bytes:
-    """Build the SessionStart packet (counter=0x0002).
+    """
+    Build the SessionStart packet (counter=0x0002).
 
     Frame 25 layout:
       counter    = 0x0002
@@ -227,7 +243,8 @@ def _build_session_start(sid: str = _DEFAULT_SID) -> bytes:
 
 
 def _build_icmd1_ack(hkid: int, seq: int, session_id: int = 293) -> bytes:
-    """Build the 47-byte ICMD1 ACK sent during streaming.
+    """
+    Build the 47-byte ICMD1 ACK sent during streaming.
 
     counter = 0x0000, inner_cmd = 0x10, inner_flag1 = 0x00, inner_flag2 = 0x00
     Body (XOR 0xe9): ``d4:ICMD1:<session_id>:lastreq1:<hkid>:SEQ3:<seq>e``
@@ -309,7 +326,8 @@ _CONT_END = bytes([0xD2, 0xBD, 0xA0, 0xA4, 0xAC, 0xD4, 0xD9, 0xD2, 0xE9])
 
 
 class _ContinueState:
-    """Stateful generator for the continue-packet payload sequence.
+    """
+    Stateful generator for the continue-packet payload sequence.
 
     Mirrors the MANAGE "CONTINUE" PACKETS SEQUENCE block from jheyman.
     Call next_packet() to obtain the next raw UDP bytes to send.
@@ -321,7 +339,7 @@ class _ContinueState:
         self.base_index: int = 0
         self._fragment_index: int = 0  # total calls to next_packet()
 
-    def next_packet(self) -> bytes:
+    def next_packet(self) -> bytes:  # noqa: PLR0912, PLR0915
         """Advance the state and return the complete continue packet bytes."""
         self._fragment_index += 1
 
@@ -333,55 +351,55 @@ class _ContinueState:
         tmp = bytearray()
 
         nd = self.nb_digits
-        L2 = len(_CONTINUE_LIST_2)
+        list_len_2 = len(_CONTINUE_LIST_2)
 
         if nd == 1:
             hdr[2] = 0x20
             hdr[7] = 0x1E
             tmp.append(_CONTINUE_LIST_1[self.base_index + self.idx[0]])
             self.idx[0] += 1
-            if self.idx[0] == 2:
+            if self.idx[0] == _CONTINUE_LIST_STEP:
                 self.nb_digits += 1
                 self.idx[1] = 1  # start at d8
                 self.idx[0] = 0
 
-        elif nd == 2:
+        elif nd == _CONTINUE_LIST_STEP:
             hdr[2] = 0x30
             hdr[7] = 0x1F
             tmp.append(_CONTINUE_LIST_2[self.idx[1]])
             tmp.append(_CONTINUE_LIST_1[self.base_index + self.idx[0]])
             self.idx[0] += 1
-            if self.idx[0] == 2:
+            if self.idx[0] == _CONTINUE_LIST_STEP:
                 self.idx[1] += 1
                 self.idx[0] = 0
-            if self.idx[1] == L2:
+            if self.idx[1] == list_len_2:
                 self.nb_digits += 1
                 self.idx[2] = 1
                 self.idx[1] = 0
                 self.idx[0] = 0
 
-        elif nd == 3:
+        elif nd == _CONTINUE_DIGITS_3:
             hdr[2] = 0x40
             hdr[7] = 0x20
             tmp.append(_CONTINUE_LIST_2[self.idx[2]])
             tmp.append(_CONTINUE_LIST_2[self.idx[1]])
             tmp.append(_CONTINUE_LIST_1[self.base_index + self.idx[0]])
             self.idx[0] += 1
-            if self.idx[0] == 2:
+            if self.idx[0] == _CONTINUE_LIST_STEP:
                 self.idx[1] += 1
                 self.idx[0] = 0
-            if self.idx[1] == L2:
+            if self.idx[1] == list_len_2:
                 self.idx[2] += 1
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[2] == L2:
+            if self.idx[2] == list_len_2:
                 self.nb_digits += 1
                 self.idx[3] = 1
                 self.idx[2] = 0
                 self.idx[1] = 0
                 self.idx[0] = 0
 
-        elif nd == 4:
+        elif nd == _CONTINUE_DIGITS_4:
             hdr[2] = 0x50
             hdr[7] = 0x21
             tmp.append(_CONTINUE_LIST_2[self.idx[3]])
@@ -389,26 +407,26 @@ class _ContinueState:
             tmp.append(_CONTINUE_LIST_2[self.idx[1]])
             tmp.append(_CONTINUE_LIST_1[self.base_index + self.idx[0]])
             self.idx[0] += 1
-            if self.idx[0] == 2:
+            if self.idx[0] == _CONTINUE_LIST_STEP:
                 self.idx[1] += 1
                 self.idx[0] = 0
-            if self.idx[1] == L2:
+            if self.idx[1] == list_len_2:
                 self.idx[2] += 1
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[2] == L2:
+            if self.idx[2] == list_len_2:
                 self.idx[3] += 1
                 self.idx[2] = 0
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[3] == L2:
+            if self.idx[3] == list_len_2:
                 self.nb_digits += 1
                 self.idx[4] = 1
                 self.idx[3] = 0
                 self.idx[2] = 0
                 self.idx[1] = 0
 
-        elif nd == 5:
+        elif nd == _MAX_CONTINUE_DIGITS:
             hdr[2] = 0x60
             hdr[7] = 0x22
             tmp.append(_CONTINUE_LIST_2[self.idx[4]])
@@ -417,37 +435,40 @@ class _ContinueState:
             tmp.append(_CONTINUE_LIST_2[self.idx[1]])
             tmp.append(_CONTINUE_LIST_1[self.base_index + self.idx[0]])
             self.idx[0] += 1
-            if self.idx[0] == 2:
+            if self.idx[0] == _CONTINUE_LIST_STEP:
                 self.idx[1] += 1
                 self.idx[0] = 0
-            if self.idx[1] == L2:
+            if self.idx[1] == list_len_2:
                 self.idx[2] += 1
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[2] == L2:
+            if self.idx[2] == list_len_2:
                 self.idx[3] += 1
                 self.idx[2] = 0
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[3] == L2:
+            if self.idx[3] == list_len_2:
                 self.idx[4] += 1
                 self.idx[3] = 0
                 self.idx[2] = 0
                 self.idx[1] = 0
                 self.idx[0] = 0
-            if self.idx[4] == L2:
+            if self.idx[4] == list_len_2:
                 self.nb_digits = 1  # restart
                 self.idx = [0, 0, 0, 0, 0]
 
         # Horrible reverse-engineered condition: restart at 1 digit
-        if len(tmp) == 5 and tmp[:4] == bytes([0xDF, 0xDC, 0xDD, 0xD0]):
+        if len(tmp) == _MAX_CONTINUE_DIGITS and tmp[:4] == bytes(
+            [0xDF, 0xDC, 0xDD, 0xD0]
+        ):
             self.nb_digits = 1
 
         return bytes(hdr) + bytes(tmp) + _CONT_END
 
 
 def _build_session_delete(sid: str = _DEFAULT_SID) -> bytes:
-    """Build the SessionDelete packet to cleanly stop the stream.
+    """
+    Build the SessionDelete packet to cleanly stop the stream.
 
     Frame 558 layout (client->camera, len=60):
       counter    = 0x0003
@@ -474,7 +495,8 @@ def _build_session_delete(sid: str = _DEFAULT_SID) -> bytes:
 
 
 class _FrameAssembler:
-    """Reassemble fragmented JPEG frames from camera UDP packets.
+    """
+    Reassemble fragmented JPEG frames from camera UDP packets.
 
     From the dump, each video UDP payload begins with a 4-byte header:
       [0-1]  chunk sequence number (uint16 LE, increases per chunk)
@@ -487,7 +509,7 @@ class _FrameAssembler:
         self._buf: bytearray = bytearray()
         self._in_frame: bool = False
 
-    def feed(self, data: bytes) -> Optional[bytes]:
+    def feed(self, data: bytes) -> bytes | None:
         """Feed one raw UDP payload.  Returns a complete JPEG if assembled."""
         if len(data) < _MJPEG_HDR_OFFSET + 2:
             return None
@@ -527,16 +549,13 @@ class _FrameAssembler:
 # ---------------------------------------------------------------------------
 
 
-def _decode_camera_msg(data: bytes) -> Optional[str]:
+def _decode_camera_msg(data: bytes) -> str | None:
     """Try to XOR-decode a camera message body (offset 13, key 0xe9)."""
-    if len(data) < 14:
+    if len(data) < _MIN_SESSION_CREATE_LEN:
         return None
     body = data[13:]
     decoded = body[:2] + bytes(b ^ _BODY_XOR_KEY for b in body[2:])
-    try:
-        return decoded.decode("ascii", "ignore")
-    except Exception:
-        return None
+    return decoded.decode("ascii", "ignore")
 
 
 def _is_session_create(data: bytes) -> bool:
@@ -550,14 +569,16 @@ def _is_session_create(data: bytes) -> bool:
 def _is_icmd1_poll(data: bytes) -> bool:
     """Return True if this is a camera ICMD1 poll during streaming."""
     # Camera ICMD1 polls are 51 bytes; header starts with 00 00 30 03
-    return len(data) == 51 and data[2:4] == bytes([0x30, 0x03])
+    return len(data) == _ICMD1_POLL_LEN and data[2:4] == bytes([0x30, 0x03])
 
 
 def _is_mjpeg(data: bytes) -> bool:
-    """Return True if this looks like a video data chunk from the camera.
+    """
+    Return True if this looks like a video data chunk from the camera.
+
     We just check the packet size to ignore 51-byte ICMD polls.
     """
-    return len(data) > 60
+    return len(data) > _MJPEG_MIN_LEN
 
 
 # ---------------------------------------------------------------------------
@@ -566,7 +587,8 @@ def _is_mjpeg(data: bytes) -> bool:
 
 
 class LanVideoClient:
-    """Connect to a HeKai/HK P2P camera on the LAN and receive MJPEG frames.
+    """
+    Connect to a HeKai/HK P2P camera on the LAN and receive MJPEG frames.
 
     Usage::
 
@@ -589,9 +611,10 @@ class LanVideoClient:
         Local UDP port to bind.  0 = let the OS choose.
     sid:
         Session string used in protocol messages (default ``j882Tm1a108000``).
+
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0917
         self,
         camera_ip: str,
         hkid: int = 0,
@@ -600,6 +623,7 @@ class LanVideoClient:
         local_port: int = VIDEO_PORT,
         sid: str = _DEFAULT_SID,
     ) -> None:
+        """Initialize the LAN video client with the camera handshake settings."""
         self.camera_ip = camera_ip
         self.camera_port = port
         self.hkid = hkid
@@ -607,7 +631,7 @@ class LanVideoClient:
         self.local_port = local_port
         self.sid = sid
 
-        self._sock: Optional[socket.socket] = None
+        self._sock: socket.socket | None = None
         self._running = False
         self._lock = threading.Lock()
         self._seq = 0
@@ -616,19 +640,22 @@ class LanVideoClient:
     # Context manager support
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> "LanVideoClient":
+    def __enter__(self) -> Self:
+        """Enter the client context by opening the UDP socket."""
         self._open()
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Exit the context manager and close the client socket."""
         self.close()
 
     # ------------------------------------------------------------------
     # Public methods
     # ------------------------------------------------------------------
 
-    def stream(self, timeout: float = 60.0) -> Iterator[bytes]:
-        """Generator that yields complete JPEG frames from the camera.
+    def stream(self, timeout: float = 60.0) -> Iterator[bytes]:  # noqa: PLR0912, PLR0915
+        """
+        Yield complete JPEG frames from the camera.
 
         Performs the full handshake, waits for ``SessionCreate``, sends
         ``SessionStart``, then enters the receive / ACK loop.
@@ -638,6 +665,7 @@ class LanVideoClient:
         timeout:
             Seconds to wait for a response at each blocking step before
             giving up.
+
         """
         self._open()
         self._running = True
@@ -647,14 +675,14 @@ class LanVideoClient:
             # -------------------------------------------------------
             # Phase 1: Connection pings (mirror frames 2-7 from dump)
             # -------------------------------------------------------
-            # Send 3× ping-type-1, wait for camera to respond
+            # Send 3x ping-type-1, wait for camera to respond
             for _ in range(3):
                 self._send(_build_ping1())
                 time.sleep(0.002)
 
             self._wait_for_ping_ack(timeout=2.0)
 
-            # Send 9× ping-type-2 (as seen in frames 8-16)
+            # Send 9x ping-type-2 (as seen in frames 8-16)
             for _ in range(9):
                 self._send(_build_ping2())
                 time.sleep(0.001)
@@ -739,10 +767,8 @@ class LanVideoClient:
         finally:
             # Cleanly close the session before exiting
             if self._running:
-                try:
+                with contextlib.suppress(Exception):
                     self._send(_build_session_delete(self.sid))
-                except Exception:
-                    pass
             self._running = False
 
     def close(self) -> None:
@@ -788,7 +814,7 @@ class LanVideoClient:
             if src_ip != self.camera_ip:
                 continue
             # Camera ping-ack: 13 bytes starting with 00 00 d0 00 92
-            if len(data) == 13 and data[4] == 0x92:
+            if len(data) == _PING_ACK_LEN and data[4] == _PING_ACK_BYTE:
                 return True
         return False
 

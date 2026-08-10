@@ -3,16 +3,28 @@ import select
 import socket
 import struct
 import time
-from typing import Dict, Optional
+
 from .lan_device import LanDevice
 
 SOURCE_PORT = 2726
 BROADCAST_PORT = 2627
 LISTEN_PORT = 5000
 COMMAND_LAN_REFRESH = 0x0B
+DISCOVERY_HEADER_SIZE = 13
+DISCOVERY_MIN_PACKET_LEN = 12
+MIN_DISCOVERY_PACKET_SIZE = 9
+ACK_PACKET_SIZE = 13
+IP_OCTET_COUNT = 4
 
 
 class LanScanner:
+    """
+    Scan the local network for compatible P2P camera devices.
+
+    This class broadcasts discovery packets on the local network and listens
+    for device responses. It decodes responses into LanDevice instances.
+    """
+
     def __init__(
         self,
         listen_port: int = LISTEN_PORT,
@@ -20,6 +32,7 @@ class LanScanner:
         broadcast_port: int = BROADCAST_PORT,
         encoding: str = "utf-8",
     ) -> None:
+        """Initialize scanner networking ports and payload encoding."""
         self.listen_port = listen_port
         self.source_port = source_port
         self.broadcast_port = broadcast_port
@@ -28,8 +41,7 @@ class LanScanner:
 
     def refresh(self, timeout: float = 3.0) -> list[LanDevice]:
         """Broadcast a LAN refresh packet and collect device responses."""
-
-        devices: Dict[str, LanDevice] = {}
+        devices: dict[str, LanDevice] = {}
         source_sock = self._open_socket(self.source_port)
         listen_sock = None
         if self.listen_port != self.source_port:
@@ -140,11 +152,11 @@ class LanScanner:
 
     def _extract_dicts(self, data: bytes) -> list[dict[str, str]]:
         candidates = []
-        if len(data) >= 13 and data[0:2] == b"\x00\x00":
+        if len(data) >= DISCOVERY_HEADER_SIZE and data[0:2] == b"\x00\x00":
             packet_len = struct.unpack_from("<H", data, 2)[0] >> 4
-            if 12 < packet_len <= len(data):
-                candidates.append(data[13:packet_len])
-        if len(data) >= 9:
+            if DISCOVERY_MIN_PACKET_LEN < packet_len <= len(data):
+                candidates.append(data[DISCOVERY_HEADER_SIZE:packet_len])
+        if len(data) >= MIN_DISCOVERY_PACKET_SIZE:
             command = data[0] >> 4
             if command == COMMAND_LAN_REFRESH:
                 candidates.append(data[9:])
@@ -160,8 +172,8 @@ class LanScanner:
                 seen.add(marker)
         return decoded
 
-    def _decode_ack(self, data: bytes) -> Optional[int]:
-        if len(data) != 13 or data[:4] != b"\x00\x00\xd0\x00":
+    def _decode_ack(self, data: bytes) -> int | None:
+        if len(data) != ACK_PACKET_SIZE or data[:4] != b"\x00\x00\xd0\x00":
             return None
         if data[4] >> 4 in {0x08, 0x09, 0x0A} and data[7:9] == b"\x09\x00":
             return 1
@@ -189,7 +201,7 @@ class LanScanner:
     def _make_mac_ip() -> str:
         return f"0x0x{random.getrandbits(32):08x}:{random.randint(0, 0x7FFFFFFF)}"
 
-    def _device_from_fields(self, fields: dict[str, str]) -> Optional[LanDevice]:
+    def _device_from_fields(self, fields: dict[str, str]) -> LanDevice | None:
         hkid = self._int_field(fields, "HKID", "hkid", "DevID", "DSTHKID")
         port = self._int_field(fields, "Prot", "UDPPort", "Port", "port")
         status = self._int_field(fields, "status", "Status", default=1)
@@ -235,8 +247,8 @@ class LanScanner:
             for item in socket.getaddrinfo(hostname, None, socket.AF_INET):
                 ip = item[4][0]
                 parts = ip.split(".")
-                if len(parts) == 4 and not ip.startswith("127."):
-                    broadcasts.add(".".join(parts[:3] + ["255"]))
+                if len(parts) == IP_OCTET_COUNT and not ip.startswith("127."):
+                    broadcasts.add(".".join([*parts[:3], "255"]))
         except OSError:
             pass
         return sorted(broadcasts)
