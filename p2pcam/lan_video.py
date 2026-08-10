@@ -245,8 +245,7 @@ def _build_icmd1_ack(hkid: int, seq: int, session_id: int = 293) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Continue-packet state machine (ported faithfully from the original
-# reverse-engineered client.py, lines 490-641).
+# Continue-packet state machine.
 # ---------------------------------------------------------------------------
 
 _CONTINUE_LIST_1 = bytes(
