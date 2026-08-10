@@ -13,7 +13,7 @@ So i had this [chinese camera](https://nl.aliexpress.com/item/Phone-monitor-P2P-
 
 Which made owning this camera quite useless. But i had since gotten into Home Asssistant and got the idea to get it working in there since my instance ran locally so it should be able to access the camera.
 
-It has been confirmed that this script works with cameras labelled MD81 or MD81S.
+It has been confirmed that this script works with cameras labelled MD81 and MD81S.
 
 ## Quick start
 
@@ -65,3 +65,7 @@ Starts the threaded HTTP server and exposes the MJPEG stream on `/stream`.
 #### `stop() -> None`
 
 Stops the HTTP server cleanly and closes its socket.
+
+## Protocol documentation
+
+You can find more documentation about the protocol [in the DOC file](DOC.md).
